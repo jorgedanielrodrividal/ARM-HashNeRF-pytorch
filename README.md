@@ -11,7 +11,7 @@ Both the rendering time and quality of ARM-HashNeRF are compared against Vanilla
   Your browser does not support the video tag.
 </video> -->
 
-https://github.com/user-attachments/assets/1d6280a2-74ee-4ca1-8ebf-9b3bf18c048c
+https://github.com/user-attachments/assets/34e75e38-9eb8-4e72-94c4-118879137aee
 
 
 
