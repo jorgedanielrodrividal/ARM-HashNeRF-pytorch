@@ -11,7 +11,7 @@ Both the rendering time and quality of ARM-HashNeRF are compared against Vanilla
   Your browser does not support the video tag.
 </video> -->
 
-https://raw.githubusercontent.com/jorgedanielrodrividal/ARM-HashNeRF-pytorch/main/original-vs-art2_50K_default.mp4
+https://github.com/user-attachments/assets/1d6280a2-74ee-4ca1-8ebf-9b3bf18c048c
 
 
 
