@@ -6,10 +6,13 @@ This project implements Accelerated Ray Marching (ARM) in [HashNerf-pytorch](htt
 Both the rendering time and quality of ARM-HashNeRF are compared against Vanilla HashNeRF. In all cases, **rendering time is reduced** while resulting in only a minimal decrease in redering quality (PSNR). For instance, in the 50K iterations comparison below, ARM-HashNeRF achieves 9.71% faster rendering compared to Vanilla HashNeRF, with only a 5.43% reduction in PSNR. Vanilla HashNeRF is on the left and ARM-HashNeRF on the right. All experiments were run using a single Tesla P100 GPU.
 
 
-<video width="100%" controls>
+<!-- <video width="100%" controls>
   <source src="original-vs-art2_50K_default.mp4" type="video/mp4">
   Your browser does not support the video tag.
-</video>
+</video> -->
+
+https://raw.githubusercontent.com/jorgedanielrodrividal/ARM-HashNeRF-pytorch/main/original-vs-art2_50K_default.mp4
+
 
 
 
