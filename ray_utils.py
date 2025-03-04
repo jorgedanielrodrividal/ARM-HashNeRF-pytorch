@@ -1,8 +1,6 @@
 import torch
 from kornia import create_meshgrid
 
-device = "cuda" if torch.cuda.is_available() else "cpu"
-
 def get_ray_directions(H, W, focal):
     """
     Get ray directions for all pixels in camera coordinate.
@@ -29,7 +27,9 @@ def get_ray_directions(H, W, focal):
     return directions
 
 
-def get_rays(directions, c2w):
+def get_rays(directions, 
+             c2w, 
+             device = "cuda" if torch.cuda.is_available() else "cpu"):
     """
     Get ray origin and normalized directions in world coordinate for all pixels in one image.
     Reference: https://www.scratchapixel.com/lessons/3d-basic-rendering/
