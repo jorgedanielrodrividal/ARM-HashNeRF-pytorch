@@ -1,74 +1,55 @@
-# HashNeRF-pytorch
+# ARM-HashNeRF-pytorch
 
-### 🌟 Update 🌟 
-Get answers to any questions about this repository using this [HuggingFace Chatbot](https://hf.co/chat/assistant/66b33a28bb36e2de9d8a2a93).
+This project implements Accelerated Ray Marching (ARM) in [HashNerf-pytorch](https://github.com/yashbhalgat/HashNeRF-pytorch), a pure PyTorch implementation of [Instant-NGP](https://github.com/NVlabs/instant-ngp). Instant-NGP drastically reduces (up to two orders of magnitude) the cost of training and evaluation of Neural Graphics Primitives that are parametrized by fully connected neural networks.
+
+## ARM-HashNeRF vs Vanilla HashNeRF
+Both the rendering time and quality of ARM-HashNeRF are compared against Vanilla HashNeRF. In all cases, **rendering time is reduced** while resulting in only a minimal decrease in redering quality (PSNR). For instance, in the 50K iterations comparison below, ARM-HashNeRF achieves 9.71% faster rendering compared to Vanilla HashNeRF, with only a 5.43% reduction in PSNR. Vanilla HashNeRF is on the left and ARM-HashNeRF on the right. All experiments were run using a single Tesla P100 GPU.
+
+
+<video width="100%" controls>
+  <source src="original-vs-art2_50K_default.mp4" type="video/mp4">
+  Your browser does not support the video tag.
+</video>
+
+
+
+## Contents
+- [Instructions](#instructions)
+- [Citation](#citation)
+- [Acknowledgments](#acknowledgments)
+
+
+## Instructions
+
+### 1. Download Dataset
+
+The NeRF synthetic LEGO dataset is used in this project. Please download the preprocessed dataset from [here](https://drive.google.com/file/d/1spe2zFbqgz2Rt0fR1tJs5seJBxS0R-Sy/view) and place it in the `ARM-HashNeRF-pytorch/` directory.
+
+
+### 2. Clone Repository
+
+```
+git clone git@github.com:jorgedanielrodrividal/ARM-HashNeRF-pytorch.git
+```
+
+### 3. Install custom vren library
+
+```
+pip install art/csrc/
+```
+
+### 4. Training
+
+```
+python run_arm_nerf.py --config configs/lego.txt --finest_res 512 --log2_hashmap_size 19 --lrate 0.01 --lrate_decay 10
+```
 
 ---
 
-[Instant-NGP](https://github.com/NVlabs/instant-ngp) recently introduced a Multi-resolution Hash Encoding for neural graphics primitives like [NeRFs](https://www.matthewtancik.com/nerf). The original NVIDIA implementation mainly in C++/CUDA, based on [tiny-cuda-nn](https://github.com/NVlabs/tiny-cuda-nn), can train NeRFs upto 100x faster!
+## Citation
 
-This project is a **pure PyTorch** implementation of [Instant-NGP](https://github.com/NVlabs/instant-ngp), built with the purpose of enabling AI Researchers to play around and innovate further upon this method.
+This project is mostly based on the amazing work of:
 
-This project is built on top of the super-useful [NeRF-pytorch](https://github.com/yenchenlin/nerf-pytorch) implementation.
-
-## Convergence speed w.r.t. Vanilla NeRF
-**HashNeRF-pytorch** (left) vs [NeRF-pytorch](https://github.com/yenchenlin/nerf-pytorch) (right):
-
-https://user-images.githubusercontent.com/8559512/154065666-f2eb156c-333c-4de4-99aa-8aa15a9254de.mp4
-
-After training for just 5k iterations (~10 minutes on a single 1050Ti), you start seeing a _crisp_ chair rendering. :)
-
-# Instructions
-Download the nerf-synthetic dataset from here: [Google Drive](https://drive.google.com/drive/folders/1JDdLGDruGNXWnM1eqY1FNL9PlStjaKWi).
-
-To train a `chair` HashNeRF model:
-```
-python run_nerf.py --config configs/chair.txt --finest_res 512 --log2_hashmap_size 19 --lrate 0.01 --lrate_decay 10
-```
-
-To train for other objects like `ficus`/`hotdog`, replace `configs/chair.txt` with `configs/{object}.txt`:
-
-![hotdog_ficus](https://user-images.githubusercontent.com/8559512/154066554-d3656d4a-1738-427c-982d-3ef4e4071969.gif)
-
-## Extras
-The code-base has additional support for:
-* Total Variation Loss for smoother embeddings (use `--tv-loss-weight` to enable)
-* Sparsity-inducing loss on the ray weights (use `--sparse-loss-weight` to enable)
-
-## ScanNet dataset support
-The repo now supports training a NeRF model on a scene from the ScanNet dataset. I personally found setting up the ScanNet dataset to be a bit tricky. Please find some instructions/notes in [ScanNet.md](ScanNet.md).
-
-
-## TODO:
-* Voxel pruning during training and/or inference
-* Accelerated ray tracing, early ray termination
-
-
-# Citation
-Kudos to [Thomas Müller](https://tom94.net/) and the NVIDIA team for this amazing work, that will greatly help accelerate Neural Graphics research:
-```
-@article{mueller2022instant,
-    title = {Instant Neural Graphics Primitives with a Multiresolution Hash Encoding},
-    author = {Thomas M\"uller and Alex Evans and Christoph Schied and Alexander Keller},
-    journal = {arXiv:2201.05989},
-    year = {2022},
-    month = jan
-}
-```
-
-Also, thanks to [Yen-Chen Lin](https://yenchenlin.me/) for the super-useful [NeRF-pytorch](https://github.com/yenchenlin/nerf-pytorch):
-```
-@misc{lin2020nerfpytorch,
-  title={NeRF-pytorch},
-  author={Yen-Chen, Lin},
-  publisher = {GitHub},
-  journal = {GitHub repository},
-  howpublished={\url{https://github.com/yenchenlin/nerf-pytorch/}},
-  year={2020}
-}
-```
-
-If you find this project useful, please consider to cite:
 ```
 @misc{bhalgat2022hashnerfpytorch,
   title={HashNeRF-pytorch},
@@ -80,6 +61,31 @@ If you find this project useful, please consider to cite:
 }
 ```
 
-## Star History
+```
+@article{mueller2022instant,
+    title = {Instant Neural Graphics Primitives with a Multiresolution Hash Encoding},
+    author = {Thomas M\"uller and Alex Evans and Christoph Schied and Alexander Keller},
+    journal = {arXiv:2201.05989},
+    year = {2022},
+    month = jan
+}
+```
 
-[![Star History Chart](https://api.star-history.com/svg?repos=yashbhalgat/HashNeRF-pytorch&type=Date)](https://star-history.com/#yashbhalgat/HashNeRF-pytorch&Date)
+If you find this work useful, feel free to cite:
+
+```
+@misc{jorgedaniel2025armhashnerfpytorch,
+  title={ARM-HashNeRF-pytorch},
+  author={Jorge Daniel},
+  publisher = {GitHub},
+  journal = {GitHub repository},
+  howpublished={\url{https://github.com/jorgedanielrodrividal/ARM-HashNeRF-pytorch/}},
+  year={2025}
+}
+```
+
+---
+
+## Acknowledgments
+Big thanks to [Yash Bhalgat](https://github.com/yashbhalgat) for his enlightening HashNeRF project. Also thanks to the author of [ngp_pl](https://github.com/kwea123/ngp_pl), which served as a key inspiration for the ARM implementation.
+

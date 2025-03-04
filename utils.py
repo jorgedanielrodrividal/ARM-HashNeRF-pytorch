@@ -5,9 +5,10 @@ import torch
 
 from ray_utils import get_rays, get_ray_directions, get_ndc_rays
 
+device = 'cuda' if torch.cuda.is_available() else "cpu"
 
 BOX_OFFSETS = torch.tensor([[[i,j,k] for i in [0, 1] for j in [0, 1] for k in [0, 1]]],
-                               device='cuda')
+                               device = device)
 
 
 def hash(coords, log2_hashmap_size):
@@ -49,7 +50,7 @@ def get_bbox3d_for_blenderobj(camera_transforms, H, W, near=2.0, far=6.0):
             return
 
         for i in [0, W-1, H*W-W, H*W-1]:
-            min_point = rays_o[i] + near*rays_d[i]
+            min_point = rays_o[i].to(device) + near*rays_d[i]
             max_point = rays_o[i] + far*rays_d[i]
             points += [min_point, max_point]
             find_min_max(min_point)
@@ -83,8 +84,8 @@ def get_bbox3d_for_llff(poses, hwf, near=0.0, far=1.0):
             return
 
         for i in [0, W-1, H*W-W, H*W-1]:
-            min_point = rays_o[i] + near*rays_d[i]
-            max_point = rays_o[i] + far*rays_d[i]
+            min_point = rays_o[i].to(device) + near*rays_d[i].to(device)
+            max_point = rays_o[i].to(device) + far*rays_d[i].to(device)
             points += [min_point, max_point]
             find_min_max(min_point)
             find_min_max(max_point)
@@ -119,7 +120,7 @@ def get_voxel_vertices(xyz, bounding_box, resolution, log2_hashmap_size):
 
 
 if __name__=="__main__":
-    with open("data/nerf_synthetic/chair/transforms_train.json", "r") as f:
+    with open("data/nerf_synthetic/lego/transforms_train.json", "r") as f:
         camera_transforms = json.load(f)
     
     bounding_box = get_bbox3d_for_blenderobj(camera_transforms, 800, 800)

@@ -12,6 +12,8 @@ import torch.nn.functional as F
 from torch.distributions import Categorical
 from tqdm import tqdm, trange
 import pickle
+import vren
+from arm.arm import ARM
 
 import matplotlib.pyplot as plt
 
@@ -25,6 +27,9 @@ from load_deepvoxels import load_dv_data
 from load_blender import load_blender_data
 from load_scannet import load_scannet_data
 from load_LINEMOD import load_LINEMOD_data
+
+# Instantiate the ARM class
+arm = ARM()
 
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -143,7 +148,7 @@ def render(H, W, K, chunk=1024*32, rays=None, c2w=None, ndc=True,
     return ret_list + [ret_dict]
 
 
-def render_path(render_poses, hwf, K, chunk, render_kwargs, gt_imgs=None, savedir=None, render_factor=0):
+def render_path(render_poses, hwf, K, chunk, render_kwargs, gt_imgs=None, savedir=None, render_factor=0, save_rendering_time = True):
 
     H, W, focal = hwf
     near, far = render_kwargs['near'], render_kwargs['far']
@@ -159,9 +164,10 @@ def render_path(render_poses, hwf, K, chunk, render_kwargs, gt_imgs=None, savedi
     psnrs = []
 
     t = time.time()
+    rendering_times = 0
     for i, c2w in enumerate(tqdm(render_poses)):
-        print(i, time.time() - t)
-        t = time.time()
+        # print(i, time.time() - t)
+        # t = time.time()
         rgb, depth, acc, _ = render(H, W, K, chunk=chunk, c2w=c2w[:3,:4], **render_kwargs)
         rgbs.append(rgb.cpu().numpy())
         # normalize depth to [0,1]
@@ -180,20 +186,30 @@ def render_path(render_poses, hwf, K, chunk, render_kwargs, gt_imgs=None, savedi
             psnrs.append(p)
 
         if savedir is not None:
-            # save rgb and depth as a figure
-            fig = plt.figure(figsize=(25,15))
-            ax = fig.add_subplot(1, 2, 1)
+            # Only save RGB 
+            # fig = plt.figure(figsize=(25,15))
+            # ax = fig.add_subplot(1, 2, 1)
             rgb8 = to8b(rgbs[-1])
-            ax.imshow(rgb8)
-            ax.axis('off')
-            ax = fig.add_subplot(1, 2, 2)
-            ax.imshow(depths[-1], cmap='plasma', vmin=0, vmax=1)
-            ax.axis('off')
+            # ax.imshow(rgb8)
+            # ax.axis('off')
+            # ax = fig.add_subplot(1, 2, 2)
+            # ax.imshow(depths[-1], cmap='plasma', vmin=0, vmax=1)
+            # ax.axis('off')
             filename = os.path.join(savedir, '{:03d}.png'.format(i))
             # save as png
-            plt.savefig(filename, bbox_inches='tight', pad_inches=0)
-            plt.close(fig)
-            # imageio.imwrite(filename, rgb8)
+            # plt.savefig(filename, bbox_inches='tight', pad_inches=0)
+            # plt.close(fig)
+            imageio.imwrite(filename, rgb8)
+        
+        rendering_time = time.time() - t
+        rendering_times += rendering_time
+        print(f"Image no: {i}, Rendering Time: {rendering_time}")
+        t = time.time()
+
+        # Only save 3 testing images
+        if i>2:
+            break
+    avg_rendering_time = rendering_times/(i+1)
 
 
     rgbs = np.stack(rgbs, 0)
@@ -203,6 +219,10 @@ def render_path(render_poses, hwf, K, chunk, render_kwargs, gt_imgs=None, savedi
         print("Avg PSNR over Test set: ", avg_psnr)
         with open(os.path.join(savedir, "test_psnrs_avg{:0.2f}.pkl".format(avg_psnr)), "wb") as fp:
             pickle.dump(psnrs, fp)
+    
+    if save_rendering_time:
+        with open(os.path.join(savedir, "avg_rendering_time.pkl"), "wb") as f:
+            pickle.dump(avg_rendering_time, f)
 
     return rgbs, depths
 
@@ -324,12 +344,23 @@ def create_nerf(args):
     return render_kwargs_train, render_kwargs_test, start, grad_vars, optimizer
 
 
-def raw2outputs(raw, z_vals, rays_d, raw_noise_std=0, white_bkgd=False, pytest=False):
+def raw2outputs(raw, z_vals, rays_d, raw_noise_std=0, white_bkgd=False, pytest=False, T_threshold=1e-4):
     """Transforms model's predictions to semantically meaningful values.
     Args:
         raw: [num_rays, num_samples along ray, 4]. Prediction from model.
         z_vals: [num_rays, num_samples along ray]. Integration time.
         rays_d: [num_rays, 3]. Direction of each ray.
+        raw_noise_std: float. Standard deviation of Gaussian noise added to predicted density values sigma.
+        Used to regularize density predictions and prevent overfitting.
+        white_bkgd: bool. If True, assumes a white background when rendering the final color.
+        This means that if a ray does not hit any object, it blends with a white background instead of black.
+        pytest: bool. If True, uses a fixed random seed for noise generation during testing.
+        Ensures reproducibility and deterministic outputs when running tests.
+        T_threshold: float. Threshold value for early ray termination (opacity-based).
+        If the accumulated transmittance along a ray falls below this value, the ray stops accumulating
+        further colors and densities, reducing computation and speeding up rendering. Value set based on Müller et al.
+        https://arxiv.org/pdf/2201.05989
+
     Returns:
         rgb_map: [num_rays, 3]. Estimated RGB color of a ray.
         disp_map: [num_rays]. Disparity map. Inverse of depth map.
@@ -337,40 +368,72 @@ def raw2outputs(raw, z_vals, rays_d, raw_noise_std=0, white_bkgd=False, pytest=F
         weights: [num_rays, num_samples]. Weights assigned to each sampled color.
         depth_map: [num_rays]. Estimated distance to object.
     """
-    raw2alpha = lambda raw, dists, act_fn=F.relu: 1.-torch.exp(-act_fn(raw)*dists)
+    raw2alpha = lambda raw, dists, act_fn=F.relu: 1. - torch.exp(-act_fn(raw) * dists)
 
-    dists = z_vals[...,1:] - z_vals[...,:-1]
-    dists = torch.cat([dists, torch.Tensor([1e10]).expand(dists[...,:1].shape)], -1)  # [N_rays, N_samples]
+    # Calculate distances between samples
+    dists = z_vals[..., 1:] - z_vals[..., :-1]
+    dists = torch.cat([dists, torch.Tensor([1e10]).expand(dists[..., :1].shape)], -1)  # [N_rays, N_samples]
+  
+    # Scale distances by the ray direction norm
+    dists = dists * torch.norm(rays_d[..., None, :], dim=-1)
 
-    dists = dists * torch.norm(rays_d[...,None,:], dim=-1)
+    # RGB prediction from FC network
+    rgb = torch.sigmoid(raw[..., :3])  # [N_rays, N_samples, 3]
 
-    rgb = torch.sigmoid(raw[...,:3])  # [N_rays, N_samples, 3]
+    # Add noise if specified
     noise = 0.
     if raw_noise_std > 0.:
-        noise = torch.randn(raw[...,3].shape) * raw_noise_std
+        noise = torch.randn(raw[..., 3].shape) * raw_noise_std
 
         # Overwrite randomly sampled data if pytest
         if pytest:
             np.random.seed(0)
-            noise = np.random.rand(*list(raw[...,3].shape)) * raw_noise_std
+            noise = np.random.rand(*list(raw[..., 3].shape)) * raw_noise_std
             noise = torch.Tensor(noise)
 
     # sigma_loss = sigma_sparsity_loss(raw[...,3])
-    alpha = raw2alpha(raw[...,3] + noise, dists)  # [N_rays, N_samples]
+    # Calculate alpha (transparency) values
+    alpha = raw2alpha(raw[..., 3] + noise, dists)  # [N_rays, N_samples]
     # weights = alpha * tf.math.cumprod(1.-alpha + 1e-10, -1, exclusive=True)
-    weights = alpha * torch.cumprod(torch.cat([torch.ones((alpha.shape[0], 1)), 1.-alpha + 1e-10], -1), -1)[:, :-1]
-    rgb_map = torch.sum(weights[...,None] * rgb, -2)  # [N_rays, 3]
+    
+    # Initialize weights
+    weights = torch.zeros_like(alpha)  # [N_rays, N_samples]
 
+    # Calculate cumulative opacity (alpha) along rays
+    accumulated_opacity = torch.cumsum(alpha, dim=-1)  # [N_rays, N_samples]
+
+
+
+
+    # If the accumulated opacity is beyond the threshold then stop ray marching 
+
+    # Create a mask for early termination based on T_threshold
+    termination_mask = accumulated_opacity >= T_threshold  # [N_rays, N_samples]
+
+    # Set weights to zero for samples after termination point
+    weights = alpha * torch.cumprod(torch.cat([torch.ones((alpha.shape[0], 1)), 1. - alpha + 1e-10], -1), -1)[:, :-1]
+
+    # Apply early termination mask: set weights to zero after the termination point for each ray
+    weights = weights * termination_mask.to(torch.float32)
+
+
+    # Final RGB map calculation (weighted sum)
+    rgb_map = torch.sum(weights[..., None] * rgb, -2)  # [N_rays, 3]
+
+    # Depth map as the weighted average of z_vals
     depth_map = torch.sum(weights * z_vals, -1) / torch.sum(weights, -1)
-    disp_map = 1./torch.max(1e-10 * torch.ones_like(depth_map), depth_map)
+    # Disparity map (inverse of depth)
+    disp_map = 1. / torch.max(1e-10 * torch.ones_like(depth_map), depth_map)
+    # Accumulated opacity along each ray
     acc_map = torch.sum(weights, -1)
 
+    # If white background is enabled, adjust RGB map accordingly
     if white_bkgd:
-        rgb_map = rgb_map + (1.-acc_map[...,None])
+        rgb_map = rgb_map + (1. - acc_map[..., None])
 
-    # Calculate weights sparsity loss
+    # Calculate weights sparsity loss (entropy)
     try:
-        entropy = Categorical(probs = torch.cat([weights, 1.0-weights.sum(-1, keepdim=True)+1e-6], dim=-1)).entropy()
+        entropy = Categorical(probs=torch.cat([weights, 1.0 - weights.sum(-1, keepdim=True) + 1e-6], dim=-1)).entropy()
     except:
         pdb.set_trace()
     sparsity_loss = entropy
@@ -451,18 +514,40 @@ def render_rays(ray_batch,
             t_rand = torch.Tensor(t_rand)
 
         z_vals = lower + (upper - lower) * t_rand
+    
 
-    pts = rays_o[...,None,:] + rays_d[...,None,:] * z_vals[...,:,None] # [N_rays, N_samples, 3]
+    # Get directions according to intersection of rays within the ray
+    _, hits_t, _ = vren.ray_aabb_intersect(rays_o.contiguous(), rays_d.contiguous(), arm.center, arm.half_size, 1)
+    noise = torch.rand_like(rays_o[:,0])
+    rays_a, xyzs, dirs, deltas, ts, counter=vren.raymarching_train(rays_o.contiguous(),
+                                              rays_d.contiguous(),
+                                                hits_t[:,0],
+                                                  arm.density_bitfield,
+                                                    arm.cascades, arm.scale,
+                                                      0,
+                                                        noise,
+                                                          arm.grid_size,
+                                                            N_samples)
+
+    total_samples = counter[1]                                                         
+    dirs = dirs[:total_samples, :] 
+
+
+    pts = rays_o[...,None,:] + dirs[...,None,:] * z_vals[...,:,None] # [N_rays, N_samples, 3]
 
     raw = network_query_fn(pts, viewdirs, network_fn)
-    rgb_map, disp_map, acc_map, weights, depth_map, sparsity_loss = raw2outputs(raw, z_vals, rays_d, raw_noise_std, white_bkgd, pytest=pytest)
+    rgb_map, disp_map, acc_map, weights, depth_map, sparsity_loss = raw2outputs(
+        raw, z_vals, dirs, raw_noise_std=raw_noise_std, 
+        white_bkgd=white_bkgd, pytest=pytest,
+        T_threshold=arm.T_threshold  # Pass the T_threshold value from arm
+        )
 
     if N_importance > 0:
 
         rgb_map_0, depth_map_0, acc_map_0, sparsity_loss_0 = rgb_map, depth_map, acc_map, sparsity_loss
 
         z_vals_mid = .5 * (z_vals[...,1:] + z_vals[...,:-1])
-        z_samples = sample_pdf(z_vals_mid, weights[...,1:-1], N_importance, det=(perturb==0.), pytest=pytest)
+        z_samples = sample_pdf(z_vals_mid, weights[...,1:-1], 16*7, det=(perturb==0.), pytest=pytest)
         z_samples = z_samples.detach()
 
         z_vals, _ = torch.sort(torch.cat([z_vals, z_samples], -1), -1)
@@ -533,7 +618,7 @@ def config_parser():
     # rendering options
     parser.add_argument("--N_samples", type=int, default=64,
                         help='number of coarse samples per ray')
-    parser.add_argument("--N_importance", type=int, default=0,
+    parser.add_argument("--N_importance", type=int, default= 0,
                         help='number of additional fine samples per ray')
     parser.add_argument("--perturb", type=float, default=1.,
                         help='set to 0. for no jitter, 1. for jitter')
@@ -711,6 +796,7 @@ def train():
     H, W, focal = hwf
     H, W = int(H), int(W)
     hwf = [H, W, focal]
+    img_wh = (W, H)
 
     if K is None:
         K = np.array([
@@ -781,7 +867,7 @@ def train():
             os.makedirs(testsavedir, exist_ok=True)
             print('test poses shape', render_poses.shape)
 
-            rgbs, _ = render_path(render_poses, hwf, K, args.chunk, render_kwargs_test, gt_imgs=images, savedir=testsavedir, render_factor=args.render_factor)
+            rgbs, _ = render_path(render_poses, hwf, K, args.chunk, render_kwargs_test, gt_imgs=images, savedir=testsavedir, render_factor=args.render_factor, save_rendering_time = True)
             print('Done rendering', testsavedir)
             imageio.mimwrite(os.path.join(testsavedir, 'video.mp4'), to8b(rgbs), fps=30, quality=8)
 
@@ -823,12 +909,29 @@ def train():
     # Summary writers
     # writer = SummaryWriter(os.path.join(basedir, 'summaries', expname))
 
+
+    # Mark invisible cells before starting training AND before calling update_density_grid
+    arm.mark_invisible_cells(K = K, poses = poses, img_wh=img_wh)
+
+    # Add constants for updating density grid 
+
+
+
+
+    update_interval = 1024
+    warmup_steps = 32
+    MAX_SAMPLES = 1024
+
     loss_list = []
     psnr_list = []
     time_list = []
     start = start + 1
     time0 = time.time()
     for i in trange(start, N_iters):
+
+        # Update density grid at the start of each iteration
+        if i%update_interval == 0:
+            arm.update_density_grid(0.01*MAX_SAMPLES/(3**0.5), warmup=i<warmup_steps)
         # Sample random ray batch
         if use_batching:
             # Random over all images
@@ -890,7 +993,8 @@ def train():
             loss = loss + img_loss0
             psnr0 = mse2psnr(img_loss0)
 
-        sparsity_loss = args.sparse_loss_weight*(extras["sparsity_loss"].sum() + extras["sparsity_loss0"].sum())
+        # sparsity_loss = args.sparse_loss_weight*(extras["sparsity_loss"].sum() + extras["sparsity_loss0"].sum())
+        sparsity_loss = args.sparse_loss_weight*(extras["sparsity_loss"].sum())
         loss = loss + sparsity_loss
 
         # add Total Variation loss
@@ -947,7 +1051,7 @@ def train():
         if i%args.i_video==0 and i > 0:
             # Turn on testing mode
             with torch.no_grad():
-                rgbs, disps = render_path(render_poses, hwf, K, args.chunk, render_kwargs_test)
+                rgbs, disps = render_path(render_poses, hwf, K, args.chunk, render_kwargs_test, save_rendering_time = False)
             print('Done, saving', rgbs.shape, disps.shape)
             moviebase = os.path.join(basedir, expname, '{}_spiral_{:06d}_'.format(expname, i))
             imageio.mimwrite(moviebase + 'rgb.mp4', to8b(rgbs), fps=30, quality=8)
